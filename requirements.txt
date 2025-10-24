@@ -1,9 +1,8 @@
 streamlit
-crewai
+crewai[google-genai]
 crewai_tools
-langchain-google-genai
 google-generativeai
 python-dotenv
 lxml
-litellm
 yt-dlp
+litellm
