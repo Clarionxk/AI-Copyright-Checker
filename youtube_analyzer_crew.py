@@ -1,95 +1,87 @@
 import os
-# --- THIS IS THE FIX (Line 1) ---
-# We import LLM from crewai instead of ChatGoogleGenerativeAI from langchain
 from crewai import Agent, Task, Crew, Process, LLM
 from crewai_tools import SerperDevTool
 
 # --- Environment Variable Check ---
-# Check for SERPER_API_KEY for the search tool
 serper_api_key = os.getenv("SERPER_API_KEY")
 if not serper_api_key:
     raise EnvironmentError("SERPER_API_KEY not found. Please set it in your .env file or Streamlit secrets.")
 
-# Initialize the search tool
 search_tool = SerperDevTool()
 
 # --- LLM Configuration ---
-# --- THIS IS THE FIX (Line 2) ---
-# We use crewai's LLM class and specify the provider 'gemini/'
+# Use crewai's native LLM class for Google
 gemini_llm = LLM(
     model='gemini/gemini-2.5-flash',
     temperature=0.1
 )
-# --- END OF FIX ---
 
-
-# --- Agent Definitions ---
+# --- Agent Definitions (FINETUNED) ---
 
 # 1. YouTube Guideline Expert
 guideline_expert = Agent(
     role='YouTube Cryptocurrency Content Policy Expert',
-    goal="""Search Google for the most current YouTube community guidelines 
-    and policies, specifically focusing on 'Spam, Deceptive Practices & Scams', 
-    'Harmful or Dangerous Content', and any rules related to finance, 
-    cryptocurrency, and NFTs.""",
-    backstory="""You are a compliance officer who is an expert on YouTube's 
-    Community Guidelines. You have deep knowledge of how these rules are 
-    applied to cryptocurrency channels. You MUST use your search tool to find 
-    the *latest* policy information.""",
+    goal="""Search for the most current YouTube community guidelines for 'Spam, Deceptive 
+    Practices & Scams' and 'Harmful or Dangerous Content'. 
+    **Crucially, also search for the *nuance* of how these policies are 
+    applied to crypto content, distinguishing between 'market analysis' 
+    and 'financial advice'**.""",
+    backstory="""You are a compliance expert who understands YouTube's policies 
+    and the crypto community. You know creators aren't trying to scam, but 
+    might accidentally trigger policies. Your goal is to find the *exact line* between passionate market analysis and a policy violation.""",
     verbose=True,
     allow_delegation=False,
     tools=[search_tool],
     llm=gemini_llm
 )
 
-# 2. Crypto Content Analyst
+# 2. Crypto Content Analyst (FINETUNED)
 content_analyst = Agent(
     role='Cryptocurrency Video Content Analyst',
-    goal="""Analyze a given video transcription to identify any specific phrases, 
-    claims, or calls-to-action that could be flagged by YouTube's policies. 
-    You must look for 'get rich quick' schemes, exaggerated promises, 
-    undisclosed sponsorships, and any form of financial advice.""",
-    backstory="""You are a meticulous analyst who specializes in crypto content. 
-    You read video transcripts and cross-reference them with YouTube's policies 
-    to find potential violations. You are looking for specific, actionable 
-    examples from the text.""",
+    goal="""Analyze a video transcription to identify *potential* policy risks. 
+    **Your primary job is to distinguish between standard crypto market 
+    commentary (like on-chain analysis, 'whale watching', price speculation) 
+    and genuine high-risk claims ('guaranteed profit', 'buy this now', 
+    'insider info').** Rate each potential issue as Low, Medium, or High risk.""",
+    backstory="""You are a seasoned crypto content analyst. You understand the jargon. 
+    You don't just flag keywords; you analyze *intent*. You know 'whale 
+    watching' is analysis, but presenting it as 'secret insider knowledge' 
+    is a risk. Your goal is to help the creator, not to 'bust' them. 
+    You must be pragmatic.""",
     verbose=True,
     allow_delegation=False,
     llm=gemini_llm
 )
 
-# 3. Report Writer
+# 3. Report Writer (FINETUNED)
 report_writer = Agent(
-    role='Compliance Report Writer',
-    goal="""Generate a concise, actionable compliance report in Markdown format. 
-    The report must summarize the policy findings from the Guideline Expert and 
-    the specific content risks from the Content Analyst. It must include a 
-    final 'Risk Score' (Clear, Low, Medium, High) and provide clear, 
-    bullet-pointed suggestions for how to fix any potential violations.""",
-    backstory="""You are a clear and concise writer who creates reports for 
-    content creators. Your reports are easy to understand and provide 
-    practical advice. You synthesize information from both the policy expert 
-    and the content analyst into a single, final report.""",
+    role='Constructive Compliance Report Writer',
+    goal="""Generate a concise, actionable report in Markdown. The report must 
+    summarize risks and provide *constructive, safe alternative phrasing*. 
+    The tone must be helpful and collaborative, not purely critical. 
+    The final 'Risk Score' should reflect a realistic, not an 
+    over-exaggerated, assessment.""",
+    backstory="""You are a helpful advisor. You synthesize the policy nuances and 
+    the content analysis into a practical guide. Your 'suggestions' 
+    are the most important part. You offer *safer ways to say the same thing* (e.g., "Instead of 'this is a good buy-in opportunity,' try 
+    'this is a level I'm personally watching.'").""",
     verbose=True,
     allow_delegation=False,
     llm=gemini_llm
 )
 
-# --- Task Definitions ---
-# The function `create_crew` now accepts the transcript and language
+# --- Task Definitions (FINETUNED) ---
 def create_crew(video_transcript, video_language):
     
     # Task 1: Research current policies
-    # This task no longer needs video_language, but we'll leave it in the
-    # description in case it's useful context for the agent.
     research_task = Task(
         description=f"""Search for the most up-to-date YouTube community guidelines 
-        regarding cryptocurrency, scams, and financial advice. Also, search for any 
-        recent news or blog posts about YouTube cracking down on crypto channels. 
-        The video language is {video_language}, which may be relevant for 
-        region-specific policies, but the primary search should be in English.
-        """,
-        expected_output="A bulleted list of key policy points and red flags to look for.",
+        regarding cryptocurrency. Focus on the *nuance* of how 'financial advice', 
+        'scams', and 'harmful content' policies are applied. What is the 
+        difference between analysis and advice? The video language is 
+        {video_language}.""",
+        expected_output="""A bulleted list of key policy red flags, with a focus 
+        on the subtle differences between allowed analysis and banned advice.""",
         agent=guideline_expert
     )
 
@@ -100,24 +92,33 @@ def create_crew(video_transcript, video_language):
         TRANSCRIPT:
         {video_transcript}
         ---
-        Cross-reference this text against the policy red flags. Identify every 
-        specific phrase or claim that could be a violation. Pay special attention 
-        to promises of returns, financial advice, or phrases that sound like 
-        'get rich quick' schemes.""",
-        expected_output="A list of potentially problematic phrases and an explanation of why they are risky.",
+        Cross-reference this text against the policy red flags. For each 
+        potential issue, provide a 'Risk Rating' (Low, Medium, High) and a 
+        brief justification.
+        
+        **IMPORTANT: Do NOT flag standard crypto analysis (like 'on-chain data', 
+        'whale wallet moved', 'I'm bullish on...') as high risk unless it's 
+        combined with a guarantee or a direct call to buy.** Differentiate between normal crypto creator enthusiasm and 
+        deceptive 'get rich quick' promises.""",
+        expected_output="""A list of potentially problematic phrases, each with a 
+        realistic Risk Rating (Low, Medium, High) and a justification.""",
         agent=content_analyst
     )
 
     # Task 3: Write the final report
     report_task = Task(
-        description="""Compile all findings into a final compliance report. 
+        description="""Compile all findings into a final, constructive compliance report. 
         The report must be in Markdown format and include:
-        1.  A brief summary of the *current* YouTube crypto policies.
-        2.  A list of *specific quotes* from the transcript that are high-risk.
-        3.  A final 'Risk Score' (Clear, Low, Medium, High).
-        4.  Actionable, bullet-pointed suggestions for how to fix the issues.
+        1.  A brief summary of the *key* policy risks found.
+        2.  A list of *specific quotes* from the transcript that are risky, 
+            along with their Risk Rating.
+        3.  A final 'Overall Risk Score' (Clear, Low, Medium, High).
+        4.  **Actionable, bullet-pointed suggestions for how to *rephrase* or 
+            *add context* to the risky quotes to reduce the violation risk 
+            *while maintaining the video's core message*.**
         """,
-        expected_output="A final, polished compliance report in Markdown.",
+        expected_output="""A final, polished compliance report in Markdown, 
+        with a focus on helpful, alternative phrasing.""",
         agent=report_writer
     )
 
@@ -126,8 +127,6 @@ def create_crew(video_transcript, video_language):
         agents=[guideline_expert, content_analyst, report_writer],
         tasks=[research_task, analyze_task, report_task],
         process=Process.sequential,
-        # --- THIS IS THE FIX ---
-        verbose=True  # Changed from 2 to True
-        # --- END OF FIX ---
+        verbose=True
     )
 
