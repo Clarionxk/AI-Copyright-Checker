@@ -1,6 +1,7 @@
 import os
-from crewai import Agent, Task, Crew, Process
-from langchain_google_genai import ChatGoogleGenerativeAI
+# --- THIS IS THE FIX (Line 1) ---
+# We import LLM from crewai instead of ChatGoogleGenerativeAI from langchain
+from crewai import Agent, Task, Crew, Process, LLM
 from crewai_tools import SerperDevTool
 
 # --- Environment Variable Check ---
@@ -13,10 +14,14 @@ if not serper_api_key:
 search_tool = SerperDevTool()
 
 # --- LLM Configuration ---
-# We'll use Gemini 2.5 Flash, as it's fast and effective
-gemini_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash",
-                                  verbose=True,
-                                  temperature=0.1)
+# --- THIS IS THE FIX (Line 2) ---
+# We use crewai's LLM class and specify the provider 'gemini/'
+gemini_llm = LLM(
+    model='gemini/gemini-2.5-flash',
+    temperature=0.1
+)
+# --- END OF FIX ---
+
 
 # --- Agent Definitions ---
 
