@@ -6,6 +6,7 @@ import tempfile
 import uuid
 import yt_dlp
 import shutil  # <-- Import the shell utilities library
+import time     # <-- Import time for the waiting loop
 
 # --- Gemini API Configuration ---
 # Load API key from Streamlit secrets or .env file
@@ -26,15 +27,16 @@ except KeyError:
 
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# --- NEW: Download function using yt-dlp ---
+# --- UPDATED: Download function using yt-dlp ---
 def download_audio_from_youtube(youtube_url, temp_dir):
     """
     Downloads audio from a YouTube URL using yt-dlp and saves it as an mp3.
     Returns the file path to the downloaded audio file.
     """
-    # Generate a unique file name
-    file_name = f"{uuid.uuid4()}.mp3"
-    temp_audio_path = os.path.join(temp_dir, file_name)
+    # Generate a unique file name *base*
+    file_name_base = f"{uuid.uuid4()}"
+    temp_audio_path_base = os.path.join(temp_dir, file_name_base)
+    final_mp3_path = f"{temp_audio_path_base}.mp3"
 
     # yt-dlp options
     # We need ffmpeg installed for this to work
@@ -44,7 +46,7 @@ def download_audio_from_youtube(youtube_url, temp_dir):
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
         }],
-        'outtmpl': temp_audio_path,
+        'outtmpl': temp_audio_path_base, # Use the base path, yt-dlp adds .mp3
         'noplaylist': True,
     }
 
@@ -52,14 +54,21 @@ def download_audio_from_youtube(youtube_url, temp_dir):
         st.write(f"Attempting to download audio from: {youtube_url}")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([youtube_url])
-        st.write(f"Audio downloaded and converted to: {temp_audio_path}")
-        return temp_audio_path
+        
+        # Check if the final mp3 file was created
+        if not os.path.exists(final_mp3_path):
+            st.error(f"yt-dlp processing error. Expected file not found: {final_mp3_path}")
+            st.warning("This could be a download or conversion issue.")
+            return None
+
+        st.write(f"Audio downloaded and converted to: {final_mp3_path}")
+        return final_mp3_path # Return the full .mp3 path
     except Exception as e:
         st.error(f"Error downloading YouTube video with yt-dlp: {e}")
         st.warning("This can happen if the video is private, deleted, or geographically restricted. It also requires `ffmpeg` to be installed on the system.")
         return None
 
-# --- Gemini Transcription Function ---
+# --- UPDATED: Gemini Transcription Function ---
 def transcribe_video_with_gemini(video_file_path, language_code):
     """
     Transcribes the video file using Gemini API.
@@ -70,8 +79,20 @@ def transcribe_video_with_gemini(video_file_path, language_code):
     # Upload the file to the Gemini API
     # Note: Gemini has a file size limit, but it's generally high for audio.
     try:
+        st.write("Uploading file to Gemini... This may take a moment.")
         audio_file = genai.upload_file(path=video_file_path)
-        st.write("Audio file uploaded to Gemini.")
+        
+        # --- ADDED: Wait for Gemini to process the file ---
+        while audio_file.state.name == "PROCESSING":
+            st.write("Waiting for Gemini file processing...")
+            time.sleep(2) # Wait 2 seconds and check again
+        
+        if audio_file.state.name == "FAILED":
+            st.error(f"Gemini file processing failed. State: {audio_file.state.name}")
+            return None, None
+        # --- END ADDED BLOCK ---
+
+        st.write("Audio file uploaded and processed by Gemini.")
     except Exception as e:
         st.error(f"Error uploading file to Gemini: {e}")
         st.error("This might be due to an unsupported audio format or a file size limit.")
@@ -145,7 +166,7 @@ def main():
                 
                 if file_path and os.path.exists(file_path):
                     # --- Step 1: Transcribe ---
-                    with st.spinner(f"Transcribing {language} audio..."):
+                    with st.spinner(f"Transcribing {language} audio... (This can take a while for large files)"):
                         transcription, audio_file_reference = transcribe_video_with_gemini(file_path, language)
                     
                     if transcription:
@@ -182,5 +203,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
