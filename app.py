@@ -172,17 +172,17 @@ def main():
                     if transcription:
                         st.success("Transcription complete.")
                         
-                        # --- Step 2: Analyze ---
+                        # --- Step 2: Analyze (FIXED) ---
                         with st.spinner("AI Crew is analyzing the content..."):
-                            # Create the crew
-                            analyzer_crew = create_crew()
+                            # Create the crew, passing the transcription and language as arguments
+                            analyzer_crew = create_crew(
+                                video_transcript=transcription,
+                                video_language=language
+                            )
                             
                             # Kick off the analysis task
-                            inputs = {
-                                "video_transcription": transcription,
-                                "video_language": language,
-                            }
-                            report = analyzer_crew.kickoff(inputs=inputs)
+                            # The inputs are now passed at creation, so kickoff() needs no inputs.
+                            report = analyzer_crew.kickoff()
                         
                         st.subheader("Compliance Report")
                         st.markdown(report)
