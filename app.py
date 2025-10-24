@@ -1,180 +1,184 @@
 import streamlit as st
 import os
-import tempfile
 import google.generativeai as genai
 from youtube_analyzer_crew import create_crew
-from pytube import YouTube
-import time
+import tempfile
+import uuid
+import yt_dlp # <-- Replaced pytube with yt-dlp
 
-# --- 1. Transcription Function (Using Gemini API) ---
+# --- Gemini API Configuration ---
+# Load API key from Streamlit secrets or .env file
+try:
+    # This is for Streamlit Cloud
+    GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+    SERPER_API_KEY = st.secrets["SERPER_API_KEY"]
+    os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
+    os.environ["SERPER_API_KEY"] = SERPER_API_KEY
+except KeyError:
+    # This is for local development
+    from dotenv import load_dotenv
+    load_dotenv()
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    if not GOOGLE_API_KEY:
+        st.error("GOOGLE_API_KEY not found. Please set it in your .env file or Streamlit secrets.")
+        st.stop()
 
-def transcribe_video_with_gemini(video_path, language_name):
+genai.configure(api_key=GOOGLE_API_KEY)
+
+# --- NEW: Download function using yt-dlp ---
+def download_audio_from_youtube(youtube_url, temp_dir):
     """
-    Transcribes the given video file (at a local path) using the Google Gemini API.
-
-    Args:
-        video_path (str): The local file path to the video/audio file.
-        language_name (str): The full language name (e.g., 'Spanish', 'German').
-
-    Returns:
-        str: The full transcript of the video, or None if failed.
+    Downloads audio from a YouTube URL using yt-dlp and saves it as an mp3.
+    Returns the file path to the downloaded audio file.
     """
-    st.info(f"Transcribing video in {language_name}... This may take a few minutes.")
+    # Generate a unique file name
+    file_name = f"{uuid.uuid4()}.mp3"
+    temp_audio_path = os.path.join(temp_dir, file_name)
+
+    # yt-dlp options
+    # We need ffmpeg installed for this to work
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+        }],
+        'outtmpl': temp_audio_path,
+        'noplaylist': True,
+    }
+
+    try:
+        st.write(f"Attempting to download audio from: {youtube_url}")
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([youtube_url])
+        st.write(f"Audio downloaded and converted to: {temp_audio_path}")
+        return temp_audio_path
+    except Exception as e:
+        st.error(f"Error downloading YouTube video with yt-dlp: {e}")
+        st.warning("This can happen if the video is private, deleted, or geographically restricted. It also requires `ffmpeg` to be installed on the system.")
+        return None
+
+# --- Gemini Transcription Function ---
+def transcribe_video_with_gemini(video_file_path, language_code):
+    """
+    Transcribes the video file using Gemini API.
+    """
+    st.write(f"Transcribing {video_file_path}...")
+    model = genai.GenerativeModel('models/gemini-2.5-flash')
     
-    # Configure the Gemini client
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        st.error("GOOGLE_API_KEY environment variable not set.")
-        return None
-        
-    genai.configure(api_key=api_key)
-    client = genai.GenerativeModel(model="gemini-2.5-flash-preview-09-2025")
-
-    uploaded_file = None
+    # Upload the file to the Gemini API
+    # Note: Gemini has a file size limit, but it's generally high for audio.
     try:
-        # 1. Upload the file to the Gemini Files API
-        st.info("Uploading file to Gemini API...")
-        uploaded_file = genai.upload_file(path=video_path)
-        
-        # 2. Make the transcription request
-        st.info("File uploaded. Requesting transcription...")
-        prompt = f"Generate a full, verbatim transcript of this video. The speech is in {language_name}."
-        
-        response = client.generate_content([prompt, uploaded_file])
-        
-        # Clean up the uploaded file from Gemini's servers
-        genai.delete_file(uploaded_file.name)
-        
-        return response.text
-
+        audio_file = genai.upload_file(path=video_file_path)
+        st.write("Audio file uploaded to Gemini.")
     except Exception as e:
-        st.error(f"Error during Gemini transcription: {e}")
-        st.error("Please ensure your GOOGLE_API_KEY is correct and has access to the Gemini API.")
-        if uploaded_file:
-            try:
-                genai.delete_file(uploaded_file.name)
-            except Exception as del_e:
-                st.warning(f"Could not clean up remote file: {del_e}")
-        return None
+        st.error(f"Error uploading file to Gemini: {e}")
+        st.error("This might be due to an unsupported audio format or a file size limit.")
+        return None, None
 
-# --- 2. YouTube Download Function ---
-
-def download_audio_from_youtube(url, temp_dir):
-    """
-    Downloads the audio from a YouTube URL to a temporary file.
-
-    Args:
-        url (str): The YouTube video URL.
-        temp_dir (str): The temporary directory to save the file.
-
-    Returns:
-        str: The file path to the downloaded audio file, or None if failed.
-    """
+    # Create the prompt for transcription
+    prompt = f"Please transcribe the following audio. The audio is in {language_code}. Provide only the full, clean transcription and nothing else."
+    
     try:
-        st.info("Downloading audio from YouTube...")
-        yt = YouTube(url)
-        
-        # Filter for audio-only streams and select the first one
-        audio_stream = yt.streams.filter(only_audio=True).first()
-        
-        if not audio_stream:
-            st.error("Could not find an audio-only stream for this video.")
-            return None
-        
-        # Download the audio to the temporary directory
-        output_path = audio_stream.download(output_path=temp_dir)
-        st.success(f"Successfully downloaded audio: {yt.title}")
-        return output_path
-        
+        response = model.generate_content([prompt, audio_file])
+        st.write("Transcription received.")
+        return response.text, audio_file
     except Exception as e:
-        st.error(f"Error downloading YouTube video: {e}")
-        return None
+        st.error(f"Error during transcription: {e}")
+        return None, None
 
-# --- 3. Streamlit App UI ---
+# --- Main Application ---
+def main():
+    st.set_page_config(page_title="YouTube Compliance Analyzer", layout="wide")
+    st.title("🤖 YouTube Crypto Compliance AI Analyzer")
 
-st.set_page_config(layout="wide")
-st.title("🤖 YouTube Crypto Compliance Analyzer (Powered by Gemini)")
-st.markdown("""
-Analyze your video for YouTube Community Guideline violations.
-You can either paste a YouTube URL or upload a video file directly.
-""")
+    st.sidebar.header("About")
+    st.sidebar.info(
+        "This tool uses a CrewAI team of AI agents, powered by Google Gemini, "
+        "to analyze your YouTube video's transcription against YouTube's Community Guidelines, "
+        "specifically for cryptocurrency content."
+    )
 
-# Language selection
-language_options = {
-    "Spanish": "es",
-    "German": "de",
-    "Portuguese": "pt",
-    "French": "fr",
-    "Arabic": "ar",
-    "English": "en"
-}
-selected_language_name = st.selectbox(
-    "Select the language of the video:",
-    options=language_options.keys()
-)
+    col1, col2 = st.columns(2)
 
-st.divider()
+    with col1:
+        st.subheader("1. Provide Your Video")
+        
+        youtube_url = st.text_input("Enter YouTube Video URL")
+        
+        st.markdown("<p style='text-align: center; color: grey;'>OR</p>", unsafe_allow_html=True)
+        
+        uploaded_file = st.file_uploader("Upload a video or audio file", type=["mp4", "mp3", "wav", "m4a", "flac"])
+        
+        language = st.selectbox(
+            "Select Video Language",
+            ("English", "Spanish", "German", "Portuguese", "French", "Arabic")
+        )
 
-# --- Input Method: YouTube URL ---
-youtube_url = st.text_input("Option 1: Paste a YouTube URL")
+        analyze_button = st.button("Analyze Video", type="primary")
 
-st.markdown("<p style='text-align: center; color: grey;'>OR</p>", unsafe_allow_html=True)
-
-# --- Input Method: File Upload ---
-uploaded_file = st.file_uploader("Option 2: Upload your video file (.mp4, .mov, .webm, .mp3, .wav)", type=["mp4", "mov", "webm", "mp3", "wav", "m4a", "flac"])
-
-st.divider()
-
-# Analysis button
-if st.button("Analyze Video"):
-    if not youtube_url and not uploaded_file:
-        st.warning("Please either paste a YouTube URL or upload a file.")
-    elif not os.environ.get("GOOGLE_API_KEY") or not os.environ.get("SERPER_API_KEY"):
-        st.error("API Key not found. Please set both GOOGLE_API_KEY and SERPER_API_KEY environment variables.")
-    else:
-        with st.spinner("Analyzing... This involves downloading (if URL), transcription, and AI crew analysis. Please wait."):
+    with col2:
+        st.subheader("2. AI Analysis & Report")
+        
+        if analyze_button:
+            if not youtube_url and not uploaded_file:
+                st.error("Please provide a YouTube URL or upload a file.")
+                st.stop()
             
+            # Create a temporary directory to store files
             temp_dir = tempfile.mkdtemp()
-            video_path_to_analyze = None
-            cleanup_path = None
-
+            file_path = None
+            
             try:
-                # --- Step 1: Get the video file path ---
                 if youtube_url:
-                    # Download from YouTube
-                    video_path_to_analyze = download_audio_from_youtube(youtube_url, temp_dir)
-                    cleanup_path = video_path_to_analyze # Mark for cleanup
+                    # Download from YouTube URL
+                    with st.spinner("Downloading audio from YouTube... (This may take a moment)"):
+                        file_path = download_audio_from_youtube(youtube_url, temp_dir)
                 
                 elif uploaded_file:
-                    # Save uploaded file to a temporary path
-                    video_path_to_analyze = os.path.join(temp_dir, uploaded_file.name)
-                    with open(video_path_to_analyze, "wb") as f:
-                        f.write(uploaded_file.getvalue())
-                    cleanup_path = video_path_to_analyze # Mark for cleanup
-
-                # --- Step 2: Transcribe the video ---
-                if video_path_to_analyze:
-                    transcript = transcribe_video_with_gemini(video_path_to_analyze, selected_language_name)
+                    # Save uploaded file
+                    file_path = os.path.join(temp_dir, uploaded_file.name)
+                    with open(file_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    st.success(f"File uploaded: {uploaded_file.name}")
+                
+                if file_path and os.path.exists(file_path):
+                    # --- Step 1: Transcribe ---
+                    with st.spinner(f"Transcribing {language} audio..."):
+                        transcription, audio_file_reference = transcribe_video_with_gemini(file_path, language)
                     
-                    if transcript:
-                        st.subheader(f"Generated Transcript ({selected_language_name})")
-                        st.text_area("", transcript, height=150)
+                    if transcription:
+                        st.success("Transcription complete.")
                         
-                        # --- Step 3: Run the CrewAI analysis ---
-                        st.subheader("🤖 AI Compliance Report")
-                        with st.spinner("AI crew is analyzing the transcript..."):
-                            try:
-                                crew = create_crew(transcript, selected_language_name)
-                                result = crew.kickoff()
-                                st.markdown(result)
-                            except Exception as e:
-                                st.error(f"An error occurred during AI analysis: {e}")
-                                st.error("This often happens due to API key issues or rate limits.")
-            
+                        # --- Step 2: Analyze ---
+                        with st.spinner("AI Crew is analyzing the content..."):
+                            # Create the crew
+                            analyzer_crew = create_crew()
+                            
+                            # Kick off the analysis task
+                            inputs = {
+                                "video_transcription": transcription,
+                                "video_language": language,
+                            }
+                            report = analyzer_crew.kickoff(inputs=inputs)
+                        
+                        st.subheader("Compliance Report")
+                        st.markdown(report)
+                        
+                        with st.expander("Show Full Transcription"):
+                            st.text_area("", transcription, height=300)
+                    
+                    else:
+                        st.error("Could not generate transcription. Analysis cancelled.")
+
             finally:
-                # --- Step 4: Cleanup ---
-                if cleanup_path and os.path.exists(cleanup_path):
-                    os.remove(cleanup_path)
+                # --- Step 3: Cleanup ---
+                if file_path and os.path.exists(file_path):
+                    os.remove(file_path)
                 if os.path.exists(temp_dir):
                     os.rmdir(temp_dir)
+                # We can't delete the Gemini file reference here as it's not a local file
+
+if __name__ == "__main__":
+    main()
 
