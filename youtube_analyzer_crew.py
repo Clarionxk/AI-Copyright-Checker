@@ -1,169 +1,128 @@
 import os
 from crewai import Agent, Task, Crew, Process
-from crewai_tools import SerperDevTool
 from langchain_google_genai import ChatGoogleGenerativeAI
+from crewai_tools import SerperDevTool
 
-# --- IMPORTANT ---
-# This file now uses the Google Gemini API.
-# Make sure you have environment variables for BOTH keys set.
-# os.environ["GOOGLE_API_KEY"] = "YOUR_API_KEY_HERE"
-# os.environ["SERPER_API_KEY"] = "YOUR_API_KEY_HERE"
-
-# Check for the API keys
-if not os.getenv("GOOGLE_API_KEY"):
-    raise EnvironmentError("GOOGLE_API_KEY environment variable not set.")
-if not os.getenv("SERPER_API_KEY"):
-    raise EnvironmentError("SERPER_API_KEY environment variable not set. Get one from serper.dev")
-
-# --- LLM DEFINITION ---
-# Initialize the Gemini LLM
-# We'll use gemini-2.5-flash-preview-09-2025 as it's fast and capable.
-gemini_llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash-preview-09-2025",
-    temperature=0.2,
-    # Make sure to pass your API key if it's not set as a default environment variable
-    # google_api_key=os.environ["GOOGLE_API_KEY"] 
-)
+# --- Environment Variable Check ---
+# Check for SERPER_API_KEY for the search tool
+serper_api_key = os.getenv("SERPER_API_KEY")
+if not serper_api_key:
+    raise EnvironmentError("SERPER_API_KEY not found. Please set it in your .env file or Streamlit secrets.")
 
 # Initialize the search tool
 search_tool = SerperDevTool()
 
-# --- AGENT DEFINITIONS ---
+# --- LLM Configuration ---
+# We'll use Gemini 2.5 Flash, as it's fast and effective
+gemini_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash",
+                                  verbose=True,
+                                  temperature=0.1)
 
-# 1. The Guideline Expert Agent
-# This agent is your specialist in YouTube's policies, especially for crypto.
+# --- Agent Definitions ---
+
+# 1. YouTube Guideline Expert
 guideline_expert = Agent(
-  role='YouTube Policy Expert for Cryptocurrency',
-  goal="""Provide the most critical YouTube community guidelines
-  that crypto channels must follow. Focus on spam, deceptive practices,
-  scams, and harmful financial content.""",
-  backstory="""You are a world-class policy analyst who has memorized
-  all of YouTube's community guidelines. You have a special focus
-  on how these rules are applied to cryptocurrency and financial content.
-  You know all the red flags, from "exaggerated promises" and "get rich quick"
-  language to "cryptophishing" and linking to unregulated exchanges.""",
-  verbose=True,
-  allow_delegation=False,
-  tools=[search_tool],
-  llm=gemini_llm  # <-- Pass the Gemini LLM to the agent
+    role='YouTube Cryptocurrency Content Policy Expert',
+    goal="""Search Google for the most current YouTube community guidelines 
+    and policies, specifically focusing on 'Spam, Deceptive Practices & Scams', 
+    'Harmful or Dangerous Content', and any rules related to finance, 
+    cryptocurrency, and NFTs.""",
+    backstory="""You are a compliance officer who is an expert on YouTube's 
+    Community Guidelines. You have deep knowledge of how these rules are 
+    applied to cryptocurrency channels. You MUST use your search tool to find 
+    the *latest* policy information.""",
+    verbose=True,
+    allow_delegation=False,
+    tools=[search_tool],
+    llm=gemini_llm
 )
 
-# 2. The Video Compliance Agent
-# This agent analyzes a specific video transcript against the guidelines.
-video_analyzer = Agent(
-  role='Video Compliance Analyzer',
-  goal="""Analyze a given video transcript against a set of YouTube policies.
-  Identify specific lines or phrases that could be flagged as violations.
-  Provide a detailed report with the problematic text, the policy it
-  might violate, and a risk level (Low, Medium, High).""",
-  backstory="""You are a meticulous compliance officer. You take a video
-  transcript and a list of rules, and you cross-reference them with extreme
-  attention to detail. You don't make assumptions; you quote the evidence
-  directly from the transcript and cite the specific rule that might
-  be at risk.""",
-  verbose=True,
-  allow_delegation=False,
-  llm=gemini_llm  # <-- Pass the Gemini LLM to the agent
+# 2. Crypto Content Analyst
+content_analyst = Agent(
+    role='Cryptocurrency Video Content Analyst',
+    goal="""Analyze a given video transcription to identify any specific phrases, 
+    claims, or calls-to-action that could be flagged by YouTube's policies. 
+    You must look for 'get rich quick' schemes, exaggerated promises, 
+    undisclosed sponsorships, and any form of financial advice.""",
+    backstory="""You are a meticulous analyst who specializes in crypto content. 
+    You read video transcripts and cross-reference them with YouTube's policies 
+    to find potential violations. You are looking for specific, actionable 
+    examples from the text.""",
+    verbose=True,
+    allow_delegation=False,
+    llm=gemini_llm
 )
 
-# --- TASK DEFINITIONS ---
+# 3. Report Writer
+report_writer = Agent(
+    role='Compliance Report Writer',
+    goal="""Generate a concise, actionable compliance report in Markdown format. 
+    The report must summarize the policy findings from the Guideline Expert and 
+    the specific content risks from the Content Analyst. It must include a 
+    final 'Risk Score' (Clear, Low, Medium, High) and provide clear, 
+    bullet-pointed suggestions for how to fix any potential violations.""",
+    backstory="""You are a clear and concise writer who creates reports for 
+    content creators. Your reports are easy to understand and provide 
+    practical advice. You synthesize information from both the policy expert 
+    and the content analyst into a single, final report.""",
+    verbose=True,
+    allow_delegation=False,
+    llm=gemini_llm
+)
 
+# --- Task Definitions ---
+# The function `create_crew` now accepts the transcript and language
 def create_crew(video_transcript, video_language):
-    """
-    Creates and configures the CrewAI crew to analyze the video.
-
-    Args:
-        video_transcript (str): The text transcript of the video.
-        video_language (str): The language of the transcript.
-
-    Returns:
-        Crew: The configured CrewAI crew.
-    """
-
-    # Task 1: Research the relevant policies
-    # This task is dynamic based on the language.
-    research_task = Task(
-      description=f"""
-      1. Find the most up-to-date YouTube community guidelines related
-         to cryptocurrency, financial advice, scams, and deceptive practices.
-      2. Pay special attention to policies on "cryptophishing," "exaggerated promises,"
-         and "get rich quick" schemes.
-      3. Summarize these rules into a concise, actionable checklist.
-      4. Conduct your search and formulate the checklist in {video_language}.
-      """,
-      expected_output="""A concise checklist of the top 5-7 YouTube policy
-      red flags for a crypto video, written in {video_language}.""",
-      agent=guideline_expert
-    )
-
-    # Task 2: Analyze the transcript
-    analysis_task = Task(
-      description=f"""
-      Using the policy checklist from the expert, analyze the following
-      video transcript (which is in {video_language}).
-
-      Scan the entire transcript for any text that matches the red flags.
-      This includes:
-      - Any "guarantees" of profit or "get rich quick" promises.
-      - Any requests for users to send cryptocurrency or share wallet details (cryptophishing).
-      - Any links to unverified exchanges or platforms without a proper disclaimer.
-      - Any hype or exaggerated claims about a coin or project without
-        clear disclaimers that this is not financial advice.
-
-      Transcript to Analyze:
-      ---
-      {video_transcript}
-      ---
-      """,
-      expected_output="""A detailed compliance report in {video_language}.
-      The report must be in Markdown format and include:
-      1.  **Overall Risk Assessment:** (Low, Medium, or High)
-      2.  **Potential Issues Found:**
-          - **Timestamp/Quote:** (Quote the exact problematic text. If timestamps aren't available, just use the quote.)
-          - **Potential Policy Violation:** (e.g., "Spam and Deceptive Practices: Exaggerated Promises")
-          - **Risk:** (Low/Medium/High)
-          - **Suggestion:** (e.g., "Add a clear 'This is not financial advice' disclaimer here.")
-      3.  **Final Summary:** A brief conclusion of the findings.
-
-      If no issues are found, state "No significant policy risks detected."
-      """,
-      agent=video_analyzer,
-      context=[research_task] # This task depends on the output of the research_task
-    )
-
-    # --- CREW DEFINITION ---
-    youtube_crew = Crew(
-      agents=[guideline_expert, video_analyzer],
-      tasks=[research_task, analysis_task],
-      process=Process.sequential,
-      verbose=2
-      # Note: You can also pass the 'llm' here to the Crew,
-      # and it will be used by all agents that don't have one specified.
-      # llm=gemini_llm 
-    )
-
-    return youtube_crew
-
-if __name__ == "__main__":
-    # This is a test run. The actual transcript will come from the Streamlit app.
-    print("--- Starting CrewAI Test Run ---")
     
-    # Mock transcript in Spanish
-    TEST_LANGUAGE = "Spanish"
-    TEST_TRANSCRIPT = """
-    ¡Hola a todos! Hoy, les voyG a mostrar una gema cripto que
-    literalmente te hará rico mañana. Es una garantía.
-    Esta moneda va a la luna, 1000x seguro.
-    Rápido, envía 1 ETH a esta billetera en la descripción
-    para entrar en la preventa exclusiva. ¡No te lo pierdas!
-    ¡Haz clic en el enlace de abajo ya!
-    """
+    # Task 1: Research current policies
+    # This task no longer needs video_language, but we'll leave it in the
+    # description in case it's useful context for the agent.
+    research_task = Task(
+        description=f"""Search for the most up-to-date YouTube community guidelines 
+        regarding cryptocurrency, scams, and financial advice. Also, search for any 
+        recent news or blog posts about YouTube cracking down on crypto channels. 
+        The video language is {video_language}, which may be relevant for 
+        region-specific policies, but the primary search should be in English.
+        """,
+        expected_output="A bulleted list of key policy points and red flags to look for.",
+        agent=guideline_expert
+    )
 
-    crew = create_crew(TEST_TRANSCRIPT, TEST_LANGUAGE)
-    result = crew.kickoff()
+    # Task 2: Analyze the provided transcript
+    analyze_task = Task(
+        description=f"""Analyze the following video transcript:
+        ---
+        TRANSCRIPT:
+        {video_transcript}
+        ---
+        Cross-reference this text against the policy red flags. Identify every 
+        specific phrase or claim that could be a violation. Pay special attention 
+        to promises of returns, financial advice, or phrases that sound like 
+        'get rich quick' schemes.""",
+        expected_output="A list of potentially problematic phrases and an explanation of why they are risky.",
+        agent=content_analyst
+    )
 
-    print("\n\n--- CrewAI Test Run Finished ---")
-    print("\n--- Final Report ---")
-    print(result)
+    # Task 3: Write the final report
+    report_task = Task(
+        description="""Compile all findings into a final compliance report. 
+        The report must be in Markdown format and include:
+        1.  A brief summary of the *current* YouTube crypto policies.
+        2.  A list of *specific quotes* from the transcript that are high-risk.
+        3.  A final 'Risk Score' (Clear, Low, Medium, High).
+        4.  Actionable, bullet-pointed suggestions for how to fix the issues.
+        """,
+        expected_output="A final, polished compliance report in Markdown.",
+        agent=report_writer
+    )
 
+    # --- Crew Definition ---
+    return Crew(
+        agents=[guideline_expert, content_analyst, report_writer],
+        tasks=[research_task, analyze_task, report_task],
+        process=Process.sequential,
+        # --- THIS IS THE FIX ---
+        verbose=True  # Changed from 2 to True
+        # --- END OF FIX ---
+    )
 
