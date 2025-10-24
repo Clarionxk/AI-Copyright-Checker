@@ -5,5 +5,5 @@ langchain-google-genai
 google-generativeai
 python-dotenv
 lxml
-pytube
+pytube>=15.0.0
 litellm
