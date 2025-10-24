@@ -4,7 +4,8 @@ import google.generativeai as genai
 from youtube_analyzer_crew import create_crew
 import tempfile
 import uuid
-import yt_dlp # <-- Replaced pytube with yt-dlp
+import yt_dlp
+import shutil  # <-- Import the shell utilities library
 
 # --- Gemini API Configuration ---
 # Load API key from Streamlit secrets or .env file
@@ -172,13 +173,14 @@ def main():
                         st.error("Could not generate transcription. Analysis cancelled.")
 
             finally:
-                # --- Step 3: Cleanup ---
-                if file_path and os.path.exists(file_path):
-                    os.remove(file_path)
+                # --- Step 3: Cleanup (Updated) ---
+                # Use shutil.rmtree to forcefully delete the directory and all its contents
                 if os.path.exists(temp_dir):
-                    os.rmdir(temp_dir)
+                    shutil.rmtree(temp_dir)
+                
                 # We can't delete the Gemini file reference here as it's not a local file
 
 if __name__ == "__main__":
     main()
+
 
